@@ -2,11 +2,14 @@
 
 Deploys a containerized Node.js application to AWS EKS with load balancing, SSL, and DNS.
 
+## See it in action
+ To see the app working: https://pulumidemo.t8rsk8s.io
+
 ## Important Context Notes:
-a) Some of this code re-uses previous infrastructure code and concepts I have used over the years. 
-b) It is a pre-flight app, security was less important than usability
-c) the diagram and stats for nerds page on the main app were not called out, but I was curious, so I figured this would be a good way to sandbox some questions I had
-d) I chose Go, because it was the quickest, easiest to instantiate considering infrastructure was being deployed. 
+1. Some of this code re-uses previous infrastructure code and concepts I have used over the years. 
+2. It is a pre-flight app, security was less important than usability
+3. the diagram and stats for nerds page on the main app were not called out, but I was curious, so I figured this would be a good way to sandbox some questions I had
+4. I chose Go, because it was the quickest, easiest to instantiate considering infrastructure was being deployed. 
 
 ## What You need.
 
