@@ -20,7 +20,7 @@ The app itself is just a simple Express server that displays a configurable valu
 - Docker running
 - Pulumi CLI
 - Go 1.18+
-- A Route53 hosted zone (currently hardcoded to `t8rsk8s.io` - you'll need to change this)
+- A Route53 hosted zone (currently hardcoded to `t8rsk8s.io` - this is my domain - you'll want to change it)
 
 ## Deploy
 
