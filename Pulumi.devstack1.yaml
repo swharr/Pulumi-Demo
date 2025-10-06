@@ -1,3 +1,4 @@
 config:
   aws:region: us-west-2
-  app:value: "Pulumi Rocks"
+  #  app:value: "Pulumi Rocks"
+  websrv1:setting: "Hello Friends from Pulumi"
