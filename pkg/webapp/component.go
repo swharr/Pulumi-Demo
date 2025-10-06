@@ -13,18 +13,17 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 	if args == nil {
 		args = &WebAppArgs{}
 	}
+
 	component := &WebApp{}
 	if err := ctx.RegisterComponentResource("examples:webapp:WebApp", name, component, opts...); err != nil {
 		return nil, err
 	}
 
-	// Default namespace = "default"
 	ns := args.Namespace
 	if ns == nil {
 		ns = pulumi.StringPtr("default")
 	}
 
-	// Default replicas = 1
 	replicas := pulumi.IntPtr(1)
 	if args.Replicas != nil {
 		replicas = args.Replicas
@@ -33,6 +32,33 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 	labels := pulumi.StringMap{
 		"app": pulumi.String(name),
 	}
+
+	// ConfigMap with metadata from IaC
+	configMap, err := corev1.NewConfigMap(ctx, fmt.Sprintf("%s-metadata", name), &corev1.ConfigMapArgs{
+		Metadata: &metav1.ObjectMetaArgs{
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Data: pulumi.StringMap{
+			"DECLARED_REGION":        args.Region,
+			"DECLARED_INSTANCE_TYPE": args.InstanceType,
+			"DECLARED_REPLICAS": replicas.ToIntPtrOutput().ApplyT(func(r *int) string {
+				if r != nil {
+					return fmt.Sprintf("%d", *r)
+				}
+				return "1"
+			}).(pulumi.StringOutput),
+			"DECLARED_SERVICE_TYPE": args.ServiceType,
+			"DECLARED_DNS":          args.DNS,
+			"DECLARED_TLS":          args.TLS,
+			"DECLARED_NLB":          args.NLB,
+			"DECLARED_NONROOT":      pulumi.String("true"),
+		},
+	}, pulumi.Parent(component))
+	if err != nil {
+		return nil, err
+	}
+	component.ConfigMap = configMap
 
 	// Deployment
 	dep, err := appsv1.NewDeployment(ctx, fmt.Sprintf("%s-dep", name), &appsv1.DeploymentArgs{
@@ -67,6 +93,13 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 						RunAsUser:    pulumi.IntPtr(1001),
 						FsGroup:      pulumi.IntPtr(1001),
 					},
+					TerminationGracePeriodSeconds: pulumi.IntPtr(30),
+					Volumes: corev1.VolumeArray{
+						&corev1.VolumeArgs{
+							Name: pulumi.String("tmp"),
+							EmptyDir: &corev1.EmptyDirVolumeSourceArgs{},
+						},
+					},
 					Containers: corev1.ContainerArray{
 						&corev1.ContainerArgs{
 							Name:  pulumi.String("app"),
@@ -81,6 +114,46 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 									Name:  pulumi.String("DISPLAY_VALUE"),
 									Value: args.DisplayValue, // required
 								},
+								// Downward API - inject runtime pod metadata
+								&corev1.EnvVarArgs{
+									Name: pulumi.String("KUBERNETES_NAMESPACE"),
+									ValueFrom: &corev1.EnvVarSourceArgs{
+										FieldRef: &corev1.ObjectFieldSelectorArgs{
+											FieldPath: pulumi.String("metadata.namespace"),
+										},
+									},
+								},
+								&corev1.EnvVarArgs{
+									Name: pulumi.String("POD_NAME"),
+									ValueFrom: &corev1.EnvVarSourceArgs{
+										FieldRef: &corev1.ObjectFieldSelectorArgs{
+											FieldPath: pulumi.String("metadata.name"),
+										},
+									},
+								},
+								&corev1.EnvVarArgs{
+									Name: pulumi.String("NODE_NAME"),
+									ValueFrom: &corev1.EnvVarSourceArgs{
+										FieldRef: &corev1.ObjectFieldSelectorArgs{
+											FieldPath: pulumi.String("spec.nodeName"),
+										},
+									},
+								},
+								&corev1.EnvVarArgs{
+									Name: pulumi.String("POD_IP"),
+									ValueFrom: &corev1.EnvVarSourceArgs{
+										FieldRef: &corev1.ObjectFieldSelectorArgs{
+											FieldPath: pulumi.String("status.podIP"),
+										},
+									},
+								},
+							},
+							EnvFrom: corev1.EnvFromSourceArray{
+								&corev1.EnvFromSourceArgs{
+									ConfigMapRef: &corev1.ConfigMapEnvSourceArgs{
+										Name: configMap.Metadata.Name(),
+									},
+								},
 							},
 							Resources: &corev1.ResourceRequirementsArgs{
 								Requests: pulumi.StringMap{
@@ -92,6 +165,12 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 									"memory": pulumi.String("256Mi"),
 								},
 							},
+							VolumeMounts: corev1.VolumeMountArray{
+								&corev1.VolumeMountArgs{
+									Name:      pulumi.String("tmp"),
+									MountPath: pulumi.String("/tmp"),
+								},
+							},
 							SecurityContext: &corev1.SecurityContextArgs{
 								AllowPrivilegeEscalation: pulumi.BoolPtr(false),
 								RunAsNonRoot:             pulumi.BoolPtr(true),
@@ -101,11 +180,11 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 										pulumi.String("ALL"),
 									},
 								},
-								ReadOnlyRootFilesystem: pulumi.BoolPtr(false),
+								ReadOnlyRootFilesystem: pulumi.BoolPtr(true),
 							},
 							LivenessProbe: &corev1.ProbeArgs{
 								HttpGet: &corev1.HTTPGetActionArgs{
-									Path: pulumi.String("/"),
+									Path: pulumi.String("/healthz"),
 									Port: pulumi.Int(3000),
 								},
 								InitialDelaySeconds: pulumi.Int(10),
@@ -115,7 +194,7 @@ func NewWebApp(ctx *pulumi.Context, name string, args *WebAppArgs, opts ...pulum
 							},
 							ReadinessProbe: &corev1.ProbeArgs{
 								HttpGet: &corev1.HTTPGetActionArgs{
-									Path: pulumi.String("/"),
+									Path: pulumi.String("/readyz"),
 									Port: pulumi.Int(3000),
 								},
 								InitialDelaySeconds: pulumi.Int(5),

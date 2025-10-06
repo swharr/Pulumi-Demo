@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/acm"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ecr"
@@ -11,31 +10,28 @@ import (
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/route53"
 	awsxec2 "github.com/pulumi/pulumi-awsx/sdk/v2/go/awsx/ec2"
 	"github.com/pulumi/pulumi-docker/sdk/v4/go/docker"
+	"github.com/pulumi/pulumi-kubernetes/sdk/v4/go/kubernetes"
 	corev1 "github.com/pulumi/pulumi-kubernetes/sdk/v4/go/kubernetes/core/v1"
 	metav1 "github.com/pulumi/pulumi-kubernetes/sdk/v4/go/kubernetes/meta/v1"
-	"github.com/pulumi/pulumi-kubernetes/sdk/v4/go/kubernetes"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
-
 	"pulumi-demoapp/pkg/webapp"
 )
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
-		// 1) Config
-		cfg := config.New(ctx, "app")
-		display := cfg.Get("value")
+		cfg := config.New(ctx, "websrv1")
+		display := cfg.Get("setting")
 		if display == "" {
-			display = "abc123"
+			display = "abc123" // default fallback
 		}
 
-		// 2) VPC with private and public subnets
+		// Setup VPC - 2 AZs, single NAT for cost savings
 		numAZs := 2
-		strategy := awsxec2.NatGatewayStrategySingle
 		vpc, err := awsxec2.NewVpc(ctx, "eks-vpc", &awsxec2.VpcArgs{
 			NumberOfAvailabilityZones: &numAZs,
 			NatGateways: &awsxec2.NatGatewayConfigurationArgs{
-				Strategy: strategy,
+				Strategy: awsxec2.NatGatewayStrategySingle,
 			},
 			SubnetSpecs: []awsxec2.SubnetSpecArgs{
 				{Type: awsxec2.SubnetTypePublic},
@@ -46,7 +42,7 @@ func main() {
 			return err
 		}
 
-		// 3) EKS Cluster IAM Role
+		// EKS cluster role
 		eksRole, err := iam.NewRole(ctx, "eks-cluster-role", &iam.RoleArgs{
 			AssumeRolePolicy: pulumi.String(`{
 				"Version": "2012-10-17",
@@ -69,7 +65,7 @@ func main() {
 			return err
 		}
 
-		// 4) EKS Cluster
+		// Create the cluster - this takes forever
 		cluster, err := eks.NewCluster(ctx, "eks-cluster", &eks.ClusterArgs{
 			RoleArn: eksRole.Arn,
 			VpcConfig: &eks.ClusterVpcConfigArgs{
@@ -85,7 +81,7 @@ func main() {
 			return err
 		}
 
-		// 5) Node Group IAM Role
+		// Node group role + policies
 		nodeRole, err := iam.NewRole(ctx, "eks-node-role", &iam.RoleArgs{
 			AssumeRolePolicy: pulumi.String(`{
 				"Version": "2012-10-17",
@@ -100,23 +96,24 @@ func main() {
 			return err
 		}
 
+		// Attach the standard EKS node policies
 		policies := []string{
 			"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
 			"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
 			"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
 		}
-		for i, policy := range policies {
+		for i, policyArn := range policies {
 			_, err = iam.NewRolePolicyAttachment(ctx, fmt.Sprintf("node-policy-%d", i), &iam.RolePolicyAttachmentArgs{
 				Role:      nodeRole.Name,
-				PolicyArn: pulumi.String(policy),
+				PolicyArn: pulumi.String(policyArn),
 			})
 			if err != nil {
 				return err
 			}
 		}
 
-		// 6) EKS Managed Node Group
-		_, err = eks.NewNodeGroup(ctx, "eks-node-group", &eks.NodeGroupArgs{
+		// Spin up node group - t3.medium should be plenty
+		nodeGroup, err := eks.NewNodeGroup(ctx, "eks-node-group", &eks.NodeGroupArgs{
 			ClusterName:   cluster.Name,
 			NodeRoleArn:   nodeRole.Arn,
 			SubnetIds:     vpc.PrivateSubnetIds,
@@ -131,15 +128,14 @@ func main() {
 			return err
 		}
 
-		// 7) ECR repo for your image
+		// ECR repo for container images
 		repo, err := ecr.NewRepository(ctx, "app-ecr", &ecr.RepositoryArgs{
-			ForceDelete: pulumi.Bool(true),
+			ForceDelete: pulumi.Bool(true), // easier cleanup for demos
 		})
 		if err != nil {
 			return err
 		}
 
-		// Get AWS account and region info
 		reg, err := aws.GetCallerIdentity(ctx, nil, nil)
 		if err != nil {
 			return err
@@ -148,10 +144,11 @@ func main() {
 		if err != nil {
 			return err
 		}
-		imageName := pulumi.Sprintf("%s.dkr.ecr.%s.amazonaws.com/%s:app-v3",
+
+		imageName := pulumi.Sprintf("%s.dkr.ecr.%s.amazonaws.com/%s:app-v4",
 			reg.AccountId, region.Name, repo.Name)
 
-		// 8) Get ECR authorization credentials
+		// Get ECR creds for docker push
 		authPassword := pulumi.All(repo.RegistryId).ApplyT(func(args []interface{}) (string, error) {
 			registryId := args[0].(string)
 			creds, err := ecr.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenArgs{
@@ -165,7 +162,7 @@ func main() {
 
 		server := pulumi.Sprintf("%s.dkr.ecr.%s.amazonaws.com", reg.AccountId, region.Name)
 
-		// 9) Build & push the image to ECR
+		// Build and push container
 		_, err = docker.NewImage(ctx, "app-image", &docker.ImageArgs{
 			ImageName: imageName,
 			Build: &docker.DockerBuildArgs{
@@ -182,7 +179,7 @@ func main() {
 			return err
 		}
 
-		// 10) Get Route53 hosted zone
+		// Grab existing Route53 zone
 		zone, err := route53.LookupZone(ctx, &route53.LookupZoneArgs{
 			Name: pulumi.StringRef("t8rsk8s.io"),
 		})
@@ -190,7 +187,7 @@ func main() {
 			return err
 		}
 
-		// 11) Create ACM certificate
+		// SSL cert via ACM
 		domainName := "pulumidemo.t8rsk8s.io"
 		cert, err := acm.NewCertificate(ctx, "cert", &acm.CertificateArgs{
 			DomainName:       pulumi.String(domainName),
@@ -200,7 +197,7 @@ func main() {
 			return err
 		}
 
-		// 12) Create Route53 record for DNS validation
+		// DNS validation record for cert
 		certValidationRecord, err := route53.NewRecord(ctx, "cert-validation", &route53.RecordArgs{
 			Name: cert.DomainValidationOptions.Index(pulumi.Int(0)).ResourceRecordName().Elem(),
 			Type: cert.DomainValidationOptions.Index(pulumi.Int(0)).ResourceRecordType().Elem(),
@@ -214,7 +211,7 @@ func main() {
 			return err
 		}
 
-		// 13) Wait for certificate validation
+		// Wait for cert validation to complete
 		certValidation, err := acm.NewCertificateValidation(ctx, "cert-validation-waiter", &acm.CertificateValidationArgs{
 			CertificateArn: cert.Arn,
 			ValidationRecordFqdns: pulumi.StringArray{
@@ -225,13 +222,13 @@ func main() {
 			return err
 		}
 
-		// 14) Generate kubeconfig
+		// Generate kubeconfig - probably a better way to do this but works
 		kubeconfig := pulumi.All(cluster.Endpoint, cluster.CertificateAuthority, cluster.Name).ApplyT(
 			func(args []interface{}) string {
 				endpoint := args[0].(string)
 				certData := args[1].(eks.ClusterCertificateAuthority).Data
 				clusterName := args[2].(string)
-				kubeConfig := fmt.Sprintf(`apiVersion: v1
+				return fmt.Sprintf(`apiVersion: v1
 clusters:
 - cluster:
     certificate-authority-data: %s
@@ -256,10 +253,10 @@ users:
         - get-token
         - --cluster-name
         - %s
-`, *certData, endpoint, clusterName, clusterName, clusterName, clusterName, clusterName, clusterName, clusterName); return kubeConfig
+`, *certData, endpoint, clusterName, clusterName, clusterName, clusterName, clusterName, clusterName, clusterName)
 			}).(pulumi.StringOutput)
 
-		// 15) K8s provider scoped to this cluster
+		// K8s provider for the cluster
 		k8sProvider, err := kubernetes.NewProvider(ctx, "k8s", &kubernetes.ProviderArgs{
 			Kubeconfig: kubeconfig,
 		}, pulumi.DependsOn([]pulumi.Resource{cluster}))
@@ -267,21 +264,40 @@ users:
 			return err
 		}
 
-		// 16) Deploy the app via ComponentResource
+		// Pull instance type from node group for metadata
+		instanceType := nodeGroup.InstanceTypes.ApplyT(func(types []string) string {
+			if len(types) > 0 {
+				return types[0]
+			}
+			return "unknown"
+		}).(pulumi.StringOutput)
+
+		tlsStatus := cert.Arn.ApplyT(func(arn string) string {
+			if arn != "" {
+				return "enabled (ACM)"
+			}
+			return "disabled"
+		}).(pulumi.StringOutput)
+
+		// Deploy app using component resource
 		wa, err := webapp.NewWebApp(ctx, "hello", &webapp.WebAppArgs{
 			Image:        imageName,
 			DisplayValue: pulumi.String(display),
 			Replicas:     pulumi.IntPtr(2),
 			Namespace:    pulumi.StringPtr("default"),
+			Region:       pulumi.String(region.Name),
+			InstanceType: instanceType,
+			ServiceType:  pulumi.String("LoadBalancer"),
+			DNS:          pulumi.String(domainName),
+			TLS:          tlsStatus,
+			NLB:          pulumi.String("enabled"),
 		}, pulumi.Provider(k8sProvider))
 		if err != nil {
 			return err
 		}
 
-		// 17) Create LoadBalancer Service with HTTPS
-		appLabels := pulumi.StringMap{
-			"app": pulumi.String("hello"),
-		}
+		// LoadBalancer service with NLB + SSL
+		appLabels := pulumi.StringMap{"app": pulumi.String("hello")}
 
 		lbService, err := corev1.NewService(ctx, "hello-lb", &corev1.ServiceArgs{
 			Metadata: &metav1.ObjectMetaArgs{
@@ -317,9 +333,8 @@ users:
 			return err
 		}
 
-		// 18) Create Route53 DNS record
+		// Point DNS at the LB
 		lbHostname := lbService.Status.LoadBalancer().Ingress().Index(pulumi.Int(0)).Hostname()
-
 		_, err = route53.NewRecord(ctx, "app-dns", &route53.RecordArgs{
 			Name:   pulumi.String(domainName),
 			Type:   pulumi.String("CNAME"),
@@ -333,7 +348,7 @@ users:
 			return err
 		}
 
-		// 19) Exports
+		// Export useful info
 		ctx.Export("region", pulumi.String(region.Name))
 		ctx.Export("clusterName", cluster.Name)
 		ctx.Export("kubeconfig", kubeconfig)

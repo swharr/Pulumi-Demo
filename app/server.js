@@ -1,13 +1,42 @@
 const express = require("express");
+const helmet = require("helmet");
 const os = require("os");
 const path = require("path");
 const app = express ();
+
+// Security headers
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// Graceful shutdown handling
+let ready = false;
 
 // Serve static files from the img directory
 app.use('/img', express.static(path.join(__dirname, 'img')));
 
 // Environment Variable. This is configurable, it defaults to "abc123"
 const value = process.env.DISPLAY_VALUE || "abc123";
+
+// Read IaC-declared values from environment
+const declared = {
+	region: process.env.DECLARED_REGION || "unknown",
+	instanceType: process.env.DECLARED_INSTANCE_TYPE || "unknown",
+	replicas: process.env.DECLARED_REPLICAS || "unknown",
+	serviceType: process.env.DECLARED_SERVICE_TYPE || "unknown",
+	dns: process.env.DECLARED_DNS || "unknown",
+	tls: process.env.DECLARED_TLS || "unknown",
+	nlb: process.env.DECLARED_NLB || "unknown",
+	nonRoot: process.env.DECLARED_NONROOT || "unknown",
+};
+
+// Health check endpoints
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+app.get("/readyz", (_req, res) => res.status(ready ? 200 : 503).send(ready ? "ready" : "not-ready"));
+
+// Graceful shutdown - stop accepting new connections, give LB time to drain
+process.on("SIGTERM", () => {
+	ready = false;
+	setTimeout(() => process.exit(0), 8000);
+});
 
 app.get("/", (_req, res) => {
 	res.set("Content-Type", "text/html");
@@ -145,21 +174,23 @@ app.get("/stats", (_req, res) => {
   		<p><a href="/" class="link">← Back to main page</a></p>
 
   		<div class="section">
-  			<h2>🏗️ Infrastructure</h2>
+  			<h2>📝 Declared (IaC) Configuration</h2>
+  			<p style="color: #00ccff; margin-bottom: 15px;">These values were declared in infrastructure-as-code at deployment time:</p>
   			<table>
-  				<tr><th>Component</th><th>Value</th></tr>
-  				<tr><td class="label">Cloud Provider</td><td class="value">AWS (us-west-2)</td></tr>
-  				<tr><td class="label">Kubernetes Platform</td><td class="value">Amazon EKS</td></tr>
-  				<tr><td class="label">Cluster Size</td><td class="value">2 nodes (t3.medium)</td></tr>
-  				<tr><td class="label">Container Registry</td><td class="value">Amazon ECR</td></tr>
-  				<tr><td class="label">Load Balancer</td><td class="value">AWS Network Load Balancer</td></tr>
-  				<tr><td class="label">DNS</td><td class="value">Route53 (pulumidemo.t8rsk8s.io)</td></tr>
-  				<tr><td class="label">SSL/TLS</td><td class="value">AWS Certificate Manager (ACM)</td></tr>
+  				<tr><th>Property</th><th>Declared Value</th></tr>
+  				<tr><td class="label">Region</td><td class="value"><code>${declared.region}</code></td></tr>
+  				<tr><td class="label">Instance Type</td><td class="value"><code>${declared.instanceType}</code></td></tr>
+  				<tr><td class="label">Replicas</td><td class="value"><code>${declared.replicas}</code></td></tr>
+  				<tr><td class="label">Service Type</td><td class="value"><code>${declared.serviceType}</code></td></tr>
+  				<tr><td class="label">DNS Domain</td><td class="value"><code>${declared.dns}</code></td></tr>
+  				<tr><td class="label">TLS Enabled</td><td class="value"><code>${declared.tls}</code></td></tr>
+  				<tr><td class="label">Network Load Balancer</td><td class="value"><code>${declared.nlb}</code></td></tr>
+  				<tr><td class="label">Non-root User</td><td class="value"><code>${declared.nonRoot}</code></td></tr>
   			</table>
   		</div>
 
   		<div class="section">
-  			<h2>🐳 Container Runtime</h2>
+  			<h2>🐳 Container Runtime (Runtime)</h2>
   			<table>
   				<tr><th>Component</th><th>Value</th></tr>
   				<tr><td class="label">Base Image</td><td class="value">node:20-alpine</td></tr>
@@ -171,7 +202,7 @@ app.get("/stats", (_req, res) => {
   		</div>
 
   		<div class="section">
-  			<h2>☸️ Kubernetes Pod Info</h2>
+  			<h2>☸️ Kubernetes Pod Info (Runtime)</h2>
   			<table>
   				<tr><th>Property</th><th>Value</th></tr>
   				<tr><td class="label">Pod Hostname</td><td class="value"><code>${stats.hostname}</code></td></tr>
@@ -179,12 +210,11 @@ app.get("/stats", (_req, res) => {
   				<tr><td class="label">Namespace</td><td class="value"><code>${stats.env.namespace}</code></td></tr>
   				<tr><td class="label">Node Name</td><td class="value"><code>${stats.env.nodeName}</code></td></tr>
   				<tr><td class="label">Pod IP</td><td class="value"><code>${stats.env.podIP}</code></td></tr>
-  				<tr><td class="label">Replicas</td><td class="value">2 pods (managed by Deployment)</td></tr>
   			</table>
   		</div>
 
   		<div class="section">
-  			<h2>🔧 Application Configuration</h2>
+  			<h2>🔧 Application Configuration (Runtime)</h2>
   			<table>
   				<tr><th>Variable</th><th>Value</th></tr>
   				<tr><td class="label">DISPLAY_VALUE</td><td class="value"><code>${stats.env.displayValue}</code></td></tr>
@@ -193,7 +223,7 @@ app.get("/stats", (_req, res) => {
   		</div>
 
   		<div class="section">
-  			<h2>💾 Memory Usage</h2>
+  			<h2>💾 Memory Usage (Runtime)</h2>
   			<table>
   				<tr><th>Metric</th><th>Value</th></tr>
   				<tr><td class="label">RSS (Resident Set Size)</td><td class="value">${(stats.memory.rss / 1024 / 1024).toFixed(2)} MB</td></tr>
@@ -254,3 +284,6 @@ Pod (Port 3000) → Express.js → Response
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on :${port}`));
+
+// Mark app as ready after startup
+setImmediate(() => { ready = true; });

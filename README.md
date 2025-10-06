@@ -1,94 +1,72 @@
-# Pulumi EKS Web Application
+# EKS Demo App
 
-Deploys a containerized Node.js application to AWS EKS with load balancing, SSL, and DNS.
+Quick demo showing how to deploy a containerized app to EKS with Pulumi. Stood this up for a take-home exercise.
 
-## See it in action
- To see the app working: https://pulumidemo.t8rsk8s.io
+## What it does
 
-## Important Context Notes:
-1. Some of this code re-uses previous infrastructure code and concepts I have used over the years. 
-2. It is a pre-flight app, security was less important than usability
-3. the diagram and stats for nerds page on the main app were not called out, but I was curious, so I figured this would be a good way to sandbox some questions I had
-4. I chose Go, because it was the quickest, easiest to instantiate considering infrastructure was being deployed. 
+Spins up:
+- EKS cluster (2 nodes, t3.medium)
+- VPC with public/private subnets
+- ECR repo + builds/pushes container
+- NLB with SSL termination
+- Route53 DNS
+- All the usual IAM stuff
 
-## What You need.
+The app itself is just a simple Express server that displays a configurable value and some stats about the deployment.
 
-- AWS credentials configured
-- Docker running locally
-- Pulumi CLI installed
-- Go installed
+## Prerequisites
 
-## Get Started
+- AWS CLI configured
+- Docker running
+- Pulumi CLI
+- Go 1.18+
+- A Route53 hosted zone (currently hardcoded to `t8rsk8s.io` - you'll need to change this)
+
+## Deploy
 
 ```bash
 pulumi up
 ```
 
-Initial deployment takes approximately 25 minutes due to EKS cluster provisioning.
+Takes about 20-25 mins because EKS is slow.
 
-## Change the app value displayed.
+## Configuration
 
+Set a custom display value:
 ```bash
-pulumi config set app:value "your text here"
+pulumi config set websrv1:setting "whatever you want"
 pulumi up
 ```
 
-Triggers a rolling pod update with zero downtime.
-
-## Modify application code
+## Update the app
 
 1. Edit `app/server.js`
-2. Update image tag in `main.go` (increment version, e.g. `app-v3` to `app-v4`)
-3. Run `pulumi up`
+2. Bump version in `main.go` (line 150-ish, change `app-v4` to `app-v5`)
+3. `pulumi up`
 
-## Access cluster with kubectl
+## Access the cluster
 
 ```bash
-pulumi stack output kubeconfig --show-secrets > ~/.kube/eks-config.yaml
-export KUBECONFIG=~/.kube/eks-config.yaml
+pulumi stack output kubeconfig --show-secrets > ~/.kube/config
 kubectl get pods
 ```
 
-## Monitor deployment
-
-```bash
-kubectl get deployments
-kubectl get pods
-kubectl get services
-kubectl logs <pod-name>
-```
-
-## Destroy infrastructure we stood up
+## Tear down
 
 ```bash
 pulumi destroy
 ```
 
-Removal takes approximately 15 minutes.
+## Notes
 
-## What infrastructure are we using? 
-_Designed to fit within the AWS Well Architected Framework Specs_ 
+- Using single NAT gateway to save costs (not prod-ready)
+- Security is pretty locked down (non-root containers, capability dropping, etc.)
+- The webapp component in `pkg/webapp/` makes it reusable
+- Health checks on `/healthz` and `/readyz`
+- Graceful shutdown handles SIGTERM properly
 
-- VPC with public and private subnets across 2 availability zones
-- EKS cluster with 2 t3.medium worker nodes
-- ECR repository for container images
-- ACM SSL certificate with DNS validation
-- Route53 DNS record _(Uses an existing Test Domain)
-- Network Load Balancer with HTTPS termination
-- Kubernetes Deployment with 2 pod replicas
-- Kubernetes Services (ClusterIP and LoadBalancer types)
+## TODO
 
-## Configuration
-
-Edit `Pulumi.devstack1.yaml`:
-
-- `aws:region` - AWS region for deployment
-- `app:value` - Text content displayed on web page
-
-## Security functions included by default.
-
-- Non-root container execution (UID 1001)
-- Dropped Linux capabilities
-- Resource limits enforced
-- Private subnets for workloads
-- TLS encryption in transit
+- [ ] Make domain configurable instead of hardcoded
+- [ ] Add monitoring/observability
+- [ ] Maybe switch to Fargate to avoid managing nodes?

@@ -8,17 +8,25 @@ import (
 
 
 type WebAppArgs struct {
-Image pulumi.StringInput
-DisplayValue pulumi.StringInput
-Replicas pulumi.IntPtrInput
-Namespace pulumi.StringPtrInput
+	Image        pulumi.StringInput
+	DisplayValue pulumi.StringInput
+	Replicas     pulumi.IntPtrInput
+	Namespace    pulumi.StringPtrInput
+
+	// IaC metadata for ConfigMap
+	Region       pulumi.StringInput
+	InstanceType pulumi.StringInput
+	ServiceType  pulumi.StringInput
+	DNS          pulumi.StringInput
+	TLS          pulumi.StringInput
+	NLB          pulumi.StringInput
 }
 
 
 type WebApp struct {
-pulumi.ResourceState
+	pulumi.ResourceState
 
-
-Service *v1.Service
-Deployment *appsv1.Deployment
+	ConfigMap  *v1.ConfigMap
+	Service    *v1.Service
+	Deployment *appsv1.Deployment
 }
