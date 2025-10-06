@@ -1,0 +1,7 @@
+name: pulumi-demoapp
+description: Minimal AWS Deployment for Pulumi Demo App
+runtime: go
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: aws-go

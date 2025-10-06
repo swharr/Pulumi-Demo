@@ -1,0 +1,13 @@
+{
+	"name": "Pulumi Sample Application",
+	"version": "0.0.001",
+	"main": "server.js",
+	"license": "MIT",
+	"scripts": {
+	  "start": "node server.js"
+	 },
+	 "dependencies": {
+	   "express": "^4.19.2"
+	 }
+	}
+
