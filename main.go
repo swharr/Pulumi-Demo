@@ -112,11 +112,12 @@ func main() {
 			}
 		}
 
-		// Spin up node group - t3.medium should be plenty
+		// Spin up node group - t3.medium should be plenty, using spot for cost savings
 		nodeGroup, err := eks.NewNodeGroup(ctx, "eks-node-group", &eks.NodeGroupArgs{
 			ClusterName:   cluster.Name,
 			NodeRoleArn:   nodeRole.Arn,
 			SubnetIds:     vpc.PrivateSubnetIds,
+			CapacityType:  pulumi.String("SPOT"),
 			InstanceTypes: pulumi.StringArray{pulumi.String("t3.medium")},
 			ScalingConfig: &eks.NodeGroupScalingConfigArgs{
 				DesiredSize: pulumi.Int(2),
